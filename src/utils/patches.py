@@ -1,7 +1,9 @@
-import numpy as np
-import numba
 from pathlib import Path
+
+import numba
+import numpy as np
 import tqdm
+
 from src.utils.io import create_add_stack, import_labels_csv, load_raw, load_segmentation
 from src.utils.utils import scale_image, create_features_mapping
 
@@ -93,7 +95,6 @@ def process_data(raw_path,
                  shape=(20, 84, 84),
                  slack=(2, 20, 20),
                  mean_voxel_size=(0.281, 0.126, 0.126)):
-
     raw_path = Path(raw_path)
     out_file = raw_path.parent / f'{raw_path.stem}_patches.h5'
 

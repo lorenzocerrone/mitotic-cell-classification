@@ -1,5 +1,6 @@
-import napari
 import h5py
+import napari
+
 from src.utils.io import load_raw, load_segmentation
 
 

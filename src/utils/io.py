@@ -1,9 +1,9 @@
+import csv
 from pathlib import Path
 
 import h5py
-import tifffile
-import csv
 import numpy as np
+import tifffile
 
 from src.utils.utils import scale_image_voxel_size
 
@@ -82,4 +82,3 @@ def load_segmentation(seg_path, flip, mean_voxel_size=None):
     if mean_voxel_size is not None:
         seg = scale_image_voxel_size(seg, voxel_size, mean_voxel_size, order=0)
     return seg
-

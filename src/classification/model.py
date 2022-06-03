@@ -1,62 +1,86 @@
-import torch
-from torch import nn
-from torch.nn import functional as F
-from torch.utils.data import DataLoader
-from torch.utils.data import random_split
-from torchvision.datasets import MNIST
-from torchvision import transforms
+from functools import partial
+
+import numpy as np
 import pytorch_lightning as pl
+import torch
+import torch.nn.functional as F
+import torchvision
+from torch import nn
+from torchvision.models.convnext import LayerNorm2d
 
 
-class LitAutoEncoder(pl.LightningModule):
+def adapt_convnext():
+    model = torchvision.models.convnext_small()
+
+    model.features[0] = torchvision.ops.misc.ConvNormActivation(1,
+                                                                96,
+                                                                kernel_size=4,
+                                                                stride=4,
+                                                                padding=0,
+                                                                norm_layer=partial(LayerNorm2d, eps=1e-6),
+                                                                activation_layer=None,
+                                                                bias=True, )
+    model.classifier[2] = nn.Linear(768, 2)
+    return model
+
+
+class MitoticNet(pl.LightningModule):
+    validation_predictions: dict
+
     def __init__(self):
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(28 * 28, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3))
-        self.decoder = nn.Sequential(
-            nn.Linear(3, 64),
-            nn.ReLU(),
-            nn.Linear(64, 28 * 28))
-
-    def forward(self, x):
-        embedding = self.encoder(x)
-        return embedding
+        super(MitoticNet, self).__init__()
+        self.model = adapt_convnext()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        lr = 1e-3
+        wd = 1e-6
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=wd)
         return optimizer
 
-    def training_step(self, train_batch, batch_idx):
-        x, y = train_batch
-        x = x.view(x.size(0), -1)
-        z = self.encoder(x)
-        x_hat = self.decoder(z)
-        loss = F.mse_loss(x_hat, x)
-        self.log('train_loss', loss)
+    def forward(self, x):
+        return self.model(x)
+
+    def _generic_step(self, batch):
+        raw, y, meta = batch
+        # to generalize
+        out = self.model(raw)
+        logits = torch.log_softmax(out, 1)
+        loss = F.nll_loss(logits, y)
+
+        pred = logits.max(1)[1]
+        acc = torch.eq(pred, y).float().mean()
+        return loss, acc, (pred, y, meta)
+
+    def training_step(self, batch, batch_idx):
+        loss, acc, _ = self._generic_step(batch)
+
+        self.log('train_loss', loss, batch_size=batch[0].shape[0])
+        self.log('train_acc', acc, batch_size=batch[0].shape[0])
         return loss
 
-    def validation_step(self, val_batch, batch_idx):
-        x, y = val_batch
-        x = x.view(x.size(0), -1)
-        z = self.encoder(x)
-        x_hat = self.decoder(z)
-        loss = F.mse_loss(x_hat, x)
-        self.log('val_loss', loss)
+    def validation_step(self, batch, batch_idx):
+        loss, _, (pred, y, meta) = self._generic_step(batch)
 
+        self.log('val_loss', loss, batch_size=pred.shape[0])
 
-# data
-dataset = MNIST('', train=True, download=True, transform=transforms.ToTensor())
-mnist_train, mnist_val = random_split(dataset, [55000, 5000])
+        return pred, y, meta
 
-train_loader = DataLoader(mnist_train, batch_size=32)
-val_loader = DataLoader(mnist_val, batch_size=32)
+    def on_validation_epoch_start(self) -> None:
+        self.validation_predictions = {}
 
-# model
-model = LitAutoEncoder()
+    def validation_epoch_end(self, outputs) -> None:
+        results = {}
+        for pred, y, meta in outputs:
+            for path, cell_idx, _pred, _y in zip(meta['path'], meta['cell_idx'], pred, y):
+                if path not in results:
+                    results[path] = {'cell_idx': [], 'predictions': [], 'labels': []}
 
-# training
-trainer = pl.Trainer(gpus=4, num_nodes=8, precision=16, limit_train_batches=0.5)
-trainer.fit(model, train_loader, val_loader)
+                results[path]['cell_idx'].append(cell_idx.item())
+                results[path]['predictions'].append(_pred.item())
+                results[path]['labels'].append(_y.item())
 
+        for path, res in results.items():
+            name = path.split('/')[-1]
+            acc = np.mean(np.array(res['predictions']) == np.array(res['labels']))
+            self.log(f'val: {name}', acc, batch_size=1)

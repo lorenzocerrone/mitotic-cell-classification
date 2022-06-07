@@ -6,7 +6,45 @@ import torch
 import torch.nn.functional as F
 import torchvision
 from torch import nn
+import torchmetrics
 from torchvision.models.convnext import LayerNorm2d
+import itertools
+import matplotlib.pyplot as plt
+
+
+def plot_confusion_matrix(cm, class_names=('Normal', 'Mitotic')):
+    """
+    taken from
+    https://towardsdatascience.com/exploring-confusion-matrix-evolution-on-tensorboard-e66b39f4ac12
+    Returns a matplotlib figure containing the plotted confusion matrix.
+
+    Args:
+       cm (array, shape = [n, n]): a confusion matrix of integer classes
+       class_names (array, shape = [n]): String names of the integer classes
+    """
+
+    figure = plt.figure(figsize=(8, 8))
+    plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+    plt.title("Confusion matrix")
+    plt.colorbar()
+    tick_marks = np.arange(len(class_names))
+    plt.xticks(tick_marks, class_names, rotation=45)
+    plt.yticks(tick_marks, class_names)
+
+    # Normalize the confusion matrix.
+    cm = np.around(cm.astype('float') / (cm.sum(axis=1)[:, np.newaxis] + 1e-16), decimals=2)
+
+    # Use white text if squares are dark; otherwise black.
+    threshold = cm.max() / 2.
+
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        color = "white" if cm[i, j] > threshold else "black"
+        plt.text(j, i, cm[i, j], horizontalalignment="center", color=color)
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    return figure
 
 
 def adapt_convnext():
@@ -30,6 +68,8 @@ class MitoticNet(pl.LightningModule):
     def __init__(self):
         super(MitoticNet, self).__init__()
         self.model = adapt_convnext()
+        self.accuracy = torchmetrics.Accuracy(num_classes=2)
+        self.confusion_matrix = torchmetrics.ConfusionMatrix(num_classes=2)
 
     def configure_optimizers(self):
         lr = 1e-3
@@ -41,7 +81,7 @@ class MitoticNet(pl.LightningModule):
     def forward(self, x):
         return self.model(x)
 
-    def _generic_step(self, batch):
+    def generic_step(self, batch):
         raw, y, meta = batch
         # to generalize
         out = self.model(raw)
@@ -49,18 +89,18 @@ class MitoticNet(pl.LightningModule):
         loss = F.nll_loss(logits, y)
 
         pred = logits.max(1)[1]
-        acc = torch.eq(pred, y).float().mean()
+        acc = self.accuracy(pred, y)
         return loss, acc, (pred, y, meta)
 
     def training_step(self, batch, batch_idx):
-        loss, acc, _ = self._generic_step(batch)
+        loss, acc, _ = self.generic_step(batch)
 
         self.log('train_loss', loss, batch_size=batch[0].shape[0])
         self.log('train_acc', acc, batch_size=batch[0].shape[0])
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss, _, (pred, y, meta) = self._generic_step(batch)
+        loss, _, (pred, y, meta) = self.generic_step(batch)
 
         self.log('val_loss', loss, batch_size=pred.shape[0])
 
@@ -70,17 +110,30 @@ class MitoticNet(pl.LightningModule):
         self.validation_predictions = {}
 
     def validation_epoch_end(self, outputs) -> None:
-        results = {}
-        for pred, y, meta in outputs:
-            for path, cell_idx, _pred, _y in zip(meta['path'], meta['cell_idx'], pred, y):
-                if path not in results:
-                    results[path] = {'cell_idx': [], 'predictions': [], 'labels': []}
-
-                results[path]['cell_idx'].append(cell_idx.item())
-                results[path]['predictions'].append(_pred.item())
-                results[path]['labels'].append(_y.item())
+        results = aggregate_results(outputs)
 
         for path, res in results.items():
             name = path.split('/')[-1]
-            acc = np.mean(np.array(res['predictions']) == np.array(res['labels']))
+            pred = torch.Tensor(res['predictions']).long()
+            lab = torch.Tensor(res['labels']).long()
+            self.confusion_matrix = self.confusion_matrix.cpu()
+            cm = self.confusion_matrix(pred.cpu(), lab.cpu()).cpu().numpy()
+            acc = self.accuracy(pred, lab)
+
+            self.logger.experiment.add_figure(f'conf matrix: {name}',
+                                              plot_confusion_matrix(cm),
+                                              global_step=self.current_epoch)
             self.log(f'val: {name}', acc, batch_size=1)
+
+
+def aggregate_results(outputs):
+    results = {}
+    for pred, y, meta in outputs:
+        for path, cell_idx, _pred, _y in zip(meta['path'], meta['cell_idx'], pred, y):
+            if path not in results:
+                results[path] = {'cell_idx': [], 'predictions': [], 'labels': []}
+
+            results[path]['cell_idx'].append(cell_idx.item())
+            results[path]['predictions'].append(_pred.item())
+            results[path]['labels'].append(_y.item())
+    return results

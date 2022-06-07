@@ -88,11 +88,59 @@ def build_patches(bboxes, raw, seg, label_mapping, shape=(20, 64, 64)):
             }
 
 
+def build_patches2d(bboxes, raw, seg, label_mapping, shape=(1, 64, 64)):
+    list_raw, list_seg, list_gt, list_idx, list_bbox = [], [], [], [], []
+    for i, (key, value) in enumerate(tqdm.tqdm(bboxes.items())):
+        zmin, xmin, ymin, zmax, xmax, ymax = value
+        center = [zmin + (zmax - zmin) // 2,
+                  xmin + (xmax - xmin) // 2,
+                  ymin + (ymax - ymin) // 2]
+
+        raw_box = raw[center[0],
+                      center[1] - shape[1] // 2:center[1] + shape[1] // 2,
+                      center[2] - shape[2] // 2:center[2] + shape[2] // 2]
+        seg_box = seg[center[0],
+                      center[1] - shape[1] // 2:center[1] + shape[1] // 2,
+                      center[2] - shape[2] // 2:center[2] + shape[2] // 2]
+
+        seg_mask = np.zeros_like(seg_box)
+        seg_mask[seg_box == key] = 1
+        seg_mask[seg_box != key] = 0
+
+        list_raw.append(raw_box)
+        list_seg.append(seg_mask)
+
+        # append label
+        if label_mapping[key] == 1:
+            list_gt.append(1)
+        elif label_mapping[key] == 10:
+            list_gt.append(0)
+        else:
+            raise ValueError
+
+        # append idx and com
+        list_idx.append(key)
+        list_bbox.append(value)
+
+    return {'raw_patches': np.array(list_raw),
+            'seg_patches': np.array(list_seg),
+            'labels': np.array(list_gt),
+            'cell_bbox': np.array(list_bbox),
+            'cell_idx': np.array(list_idx),
+            }
+
+
+def pad_stack(stack, shape):
+    return np.pad(stack, pad_width=((shape[0] // 2, shape[0] // 2),
+                                    (shape[1] // 2, shape[1] // 2),
+                                    (shape[2] // 2, shape[2] // 2)))
+
+
 def process_data(raw_path,
                  segmentation_path,
                  labels_csv_path,
                  flip=False,
-                 shape=(20, 84, 84),
+                 shape=(0, 128, 128),
                  slack=(2, 20, 20),
                  mean_voxel_size=(0.281, 0.126, 0.126)):
     raw_path = Path(raw_path)
@@ -113,13 +161,20 @@ def process_data(raw_path,
     seg_label = np.unique(seg)
 
     label_mapping = create_features_mapping(idx_labels, labels, seg_label[1:])
+
+    print('-add_patches')
+    raw = pad_stack(raw, shape=shape)
+    seg = pad_stack(seg, shape=shape)
+
     print('-building bboxes...')
     bboxes = get_bboxes(seg.astype('int64'), seg_label[1:].astype('int64'), slack=slack)
+
     print('-building patches...')
-    patches = build_patches(bboxes, raw,
-                            seg,
-                            label_mapping,
-                            shape=shape)
+    patches = build_patches2d(bboxes,
+                              raw,
+                              seg,
+                              label_mapping,
+                              shape=shape)
 
     for key, value in patches.items():
         create_add_stack(path=out_file, key=key, stack=value)

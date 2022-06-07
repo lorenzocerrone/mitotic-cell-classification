@@ -20,7 +20,7 @@ def patches_visualizer(patches_path):
         labels = f['labels'][...]
 
     labels += 1
-    labels_patches = seg_patches * labels[:, None, None, None]
+    labels_patches = seg_patches * labels[:, None, None]
     # start viewer
     viewer = napari.Viewer()
     viewer.add_image(raw_patches, contrast_limits=(0, 1))

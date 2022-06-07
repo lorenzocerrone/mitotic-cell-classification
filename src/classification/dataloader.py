@@ -35,7 +35,6 @@ class PatchDataset2D(Dataset):
         global_list_stack, global_num_nuclei, labels = self.get_samples_mapping(list_paths)
 
         self.labels = labels
-        self.z_mid_point = self.get_z_mid_point(list_paths[0])
         self.global_num_nuclei = global_num_nuclei
         self.global_list_stack = global_list_stack
 
@@ -47,16 +46,10 @@ class PatchDataset2D(Dataset):
         self.h5_cache = h5_cache
         self.data_cache = {}
 
-    @staticmethod
-    def get_z_mid_point(path):
-        with h5py.File(path, 'r') as f:
-            x = f['raw_patches'].shape[1] // 2
-        return x
-
     def load_from_file(self, idx):
         cell_pos, path, cell_idx = self.global_list_stack[idx]
         with h5py.File(path, 'r') as f:
-            raw = f['raw_patches'][cell_pos, self.z_mid_point, ...]
+            raw = f['raw_patches'][cell_pos, ...]
 
         raw = torch.from_numpy(raw).float()
         return raw, {'cell_pos': cell_pos, 'path': str(path), 'cell_idx': cell_idx}
@@ -65,7 +58,7 @@ class PatchDataset2D(Dataset):
         cell_pos, path, cell_idx = self.global_list_stack[idx]
         if path not in self.data_cache:
             with h5py.File(path, 'r') as f:
-                raw = f['raw_patches'][:, self.z_mid_point, ...]
+                raw = f['raw_patches'][:, ...]
                 raw = torch.from_numpy(raw).float()
                 self.data_cache[path] = raw
 

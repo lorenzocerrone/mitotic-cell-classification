@@ -6,6 +6,7 @@ import csv
 
 from src.classification.dataloader import PatchDataset2D, get_cv_splits
 from src.classification.model import MitoticNet, aggregate_results
+from src.classification import dataset_mean, dataset_std
 
 default_config = {'datadir': '/home/lcerrone/data/Mitotic-cells/raw/',
                   'split': 0,
@@ -26,10 +27,10 @@ def train(config=None):
                                        # transforms.RandomPerspective(),
                                        transforms.RandomRotation((0, 360)),
                                        transforms.GaussianBlur(kernel_size=5, sigma=(0.001, 2.)),
-                                       transforms.Normalize((0.11714157462120056,), (0.13272494077682495,))
+                                       transforms.Normalize((dataset_mean,), (dataset_std,))
                                        ])
 
-    normalize = transforms.Normalize((0.11714157462120056,), (0.13272494077682495,))
+    normalize = transforms.Normalize((dataset_mean,), (dataset_std,))
 
     train_dataset = PatchDataset2D(split['train'], use_cache=True, transforms=m_transforms)
     val_dataset = PatchDataset2D(split['val'], use_cache=True, transforms=normalize)
@@ -71,7 +72,7 @@ def compute_predictions(model, test_loader):
 
 
 def simple_predict(stack_path, model_path):
-    normalize = transforms.Normalize((0.11714157462120056,), (0.13272494077682495,))
+    normalize = transforms.Normalize((dataset_mean,), (dataset_std,))
     test_dataset = PatchDataset2D([stack_path], use_cache=True, transforms=normalize)
     test_loader = DataLoader(test_dataset, batch_size=30, num_workers=20)
 

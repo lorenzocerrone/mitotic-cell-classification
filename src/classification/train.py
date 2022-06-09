@@ -28,13 +28,16 @@ def train(config=None):
                                        # transforms.RandomPerspective(),
                                        # #transforms.RandomRotation((0, 360)),
                                        # #transforms.GaussianBlur(kernel_size=5, sigma=(0.001, 2.)),
-                                       transforms.Normalize((dataset_mean,), (dataset_std,))
+                                       transforms.Normalize((dataset_mean,), (dataset_std,)),
+                                       transforms.CenterCrop((96, 96))
                                        ])
 
-    normalize = transforms.Normalize((dataset_mean,), (dataset_std,))
+    v_transforms = transforms.Compose([transforms.Normalize((dataset_mean,), (dataset_std,)),
+                                       transforms.CenterCrop((96, 96))
+                                       ])
 
     train_dataset = PatchDataset2D(split['train'], use_cache=True, transforms=m_transforms)
-    val_dataset = PatchDataset2D(split['val'], use_cache=True, transforms=normalize)
+    val_dataset = PatchDataset2D(split['val'], use_cache=True, transforms=v_transforms)
 
     sampler = WeightedRandomSampler(train_dataset.compute_weights(), len(train_dataset), replacement=True)
     train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], sampler=sampler, num_workers=20)

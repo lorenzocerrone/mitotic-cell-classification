@@ -37,7 +37,7 @@ def plot_confusion_matrix(cm, class_names=('Normal', 'Mitotic')):
     plt.yticks(tick_marks, class_names)
 
     # Use white text if squares are dark; otherwise black.
-    threshold = cm.max() / 2.
+    threshold = np.max(cm) / 2.
 
     for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
         color = "white" if cm[i, j] > threshold else "black"
@@ -75,7 +75,7 @@ class MitoticNet(pl.LightningModule):
 
     def configure_optimizers(self):
         lr = 1e-3
-        wd = 1e-6
+        wd = 0
 
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=wd)
         return optimizer
@@ -83,7 +83,7 @@ class MitoticNet(pl.LightningModule):
     def forward(self, x):
         return self.model(x)
 
-    def generic_step(self, raw, y):
+    def generic_step(self, raw, y, *args):
         # to generalize
         out = self.model(raw)
         logits = torch.log_softmax(out, 1)

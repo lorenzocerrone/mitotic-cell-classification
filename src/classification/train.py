@@ -3,6 +3,7 @@ from pytorch_lightning import loggers as pl_loggers
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import transforms
 import csv
+import torch
 
 from src.classification.dataloader import PatchDataset2D, get_cv_splits
 from src.classification.model import MitoticNet, aggregate_results
@@ -25,8 +26,8 @@ def train(config=None):
                                        transforms.RandomAutocontrast(),
                                        # transforms.RandomErasing(),
                                        # transforms.RandomPerspective(),
-                                       transforms.RandomRotation((0, 360)),
-                                       transforms.GaussianBlur(kernel_size=5, sigma=(0.001, 2.)),
+                                       # #transforms.RandomRotation((0, 360)),
+                                       # #transforms.GaussianBlur(kernel_size=5, sigma=(0.001, 2.)),
                                        transforms.Normalize((dataset_mean,), (dataset_std,))
                                        ])
 
@@ -61,9 +62,14 @@ def export_labels_csv(cell_ids, cell_labels, path, csv_columns=('Label', 'Parent
 
 
 def compute_predictions(model, test_loader):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     all_predictions = []
+    model = model.to(device)
     for data in test_loader:
-        _, _, (pred, y, meta) = model.generic_step(data)
+        raw, y, meta = data
+        raw = raw.to(device)
+        y = y.to(device)
+        _, _, (pred, y) = model.generic_step(raw, y)
         all_predictions.append([pred, y, meta])
 
     results = aggregate_results(all_predictions)

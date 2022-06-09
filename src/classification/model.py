@@ -22,24 +22,26 @@ def plot_confusion_matrix(cm, class_names=('Normal', 'Mitotic')):
        cm (array, shape = [n, n]): a confusion matrix of integer classes
        class_names (array, shape = [n]): String names of the integer classes
     """
+    # Normalize the confusion matrix.
+    norm = cm.sum(axis=1)[:, np.newaxis]
+    num_mitotic = norm[1][0]
+    tot_cells = np.sum(norm)
+    cm = np.around(cm.astype('float') / (norm + 1e-16), decimals=3)
 
-    figure = plt.figure(figsize=(8, 8))
+    figure = plt.figure(figsize=(10, 8))
     plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-    plt.title("Confusion matrix")
+    plt.title(f"Confusion matrix: Total cells: {tot_cells}, Mitotic: {num_mitotic}")
     plt.colorbar()
     tick_marks = np.arange(len(class_names))
     plt.xticks(tick_marks, class_names, rotation=45)
     plt.yticks(tick_marks, class_names)
-
-    # Normalize the confusion matrix.
-    cm = np.around(cm.astype('float') / (cm.sum(axis=1)[:, np.newaxis] + 1e-16), decimals=2)
 
     # Use white text if squares are dark; otherwise black.
     threshold = cm.max() / 2.
 
     for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
         color = "white" if cm[i, j] > threshold else "black"
-        plt.text(j, i, cm[i, j], horizontalalignment="center", color=color)
+        plt.text(j, i, f'{cm[i, j]}', horizontalalignment="center", color=color)
 
     plt.tight_layout()
     plt.ylabel('True label')
@@ -81,8 +83,7 @@ class MitoticNet(pl.LightningModule):
     def forward(self, x):
         return self.model(x)
 
-    def generic_step(self, batch):
-        raw, y, meta = batch
+    def generic_step(self, raw, y):
         # to generalize
         out = self.model(raw)
         logits = torch.log_softmax(out, 1)
@@ -90,21 +91,21 @@ class MitoticNet(pl.LightningModule):
 
         pred = logits.max(1)[1]
         acc = self.accuracy(pred, y)
-        return loss, acc, (pred, y, meta)
+        return loss, acc, (pred, y)
 
     def training_step(self, batch, batch_idx):
-        loss, acc, _ = self.generic_step(batch)
+        loss, acc, _ = self.generic_step(*batch)
 
         self.log('train_loss', loss, batch_size=batch[0].shape[0])
         self.log('train_acc', acc, batch_size=batch[0].shape[0])
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss, _, (pred, y, meta) = self.generic_step(batch)
+        loss, _, (pred, y) = self.generic_step(*batch)
 
         self.log('val_loss', loss, batch_size=pred.shape[0])
 
-        return pred, y, meta
+        return pred, y, batch[2]
 
     def on_validation_epoch_start(self) -> None:
         self.validation_predictions = {}

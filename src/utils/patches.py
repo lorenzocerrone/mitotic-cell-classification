@@ -88,7 +88,7 @@ def build_patches(bboxes, raw, seg, label_mapping, shape=(20, 64, 64)):
             }
 
 
-def build_patches2d(bboxes, raw, seg, label_mapping, shape=(1, 64, 64)):
+def build_patches2d(bboxes, raw, seg, label_mapping=None, shape=(1, 64, 64)):
     list_raw, list_seg, list_gt, list_idx, list_bbox = [], [], [], [], []
     for i, (key, value) in enumerate(tqdm.tqdm(bboxes.items())):
         zmin, xmin, ymin, zmax, xmax, ymax = value
@@ -111,12 +111,16 @@ def build_patches2d(bboxes, raw, seg, label_mapping, shape=(1, 64, 64)):
         list_seg.append(seg_mask)
 
         # append label
-        if label_mapping[key] == 1:
-            list_gt.append(1)
-        elif label_mapping[key] == 10:
-            list_gt.append(0)
+        if label_mapping is not None:
+
+            if label_mapping[key] == 1:
+                list_gt.append(1)
+            elif label_mapping[key] == 10:
+                list_gt.append(0)
+            else:
+                raise ValueError
         else:
-            raise ValueError
+            list_gt.append(0)
 
         # append idx and com
         list_idx.append(key)
@@ -138,7 +142,7 @@ def pad_stack(stack, shape):
 
 def process_data(raw_path,
                  segmentation_path,
-                 labels_csv_path,
+                 labels_csv_path=None,
                  flip=False,
                  shape=(0, 128, 128),
                  slack=(2, 20, 20),
@@ -154,13 +158,14 @@ def process_data(raw_path,
     print('-processing segmentation...')
     seg = load_segmentation(segmentation_path, flip=flip, mean_voxel_size=mean_voxel_size)
     create_add_stack(path=out_file, key='segmentation', stack=seg, voxel_size=mean_voxel_size)
-
-    idx_labels, labels = import_labels_csv(labels_csv_path)
-
     # proces segmentation to get bbox
     seg_label = np.unique(seg)
 
-    label_mapping = create_features_mapping(idx_labels, labels, seg_label[1:])
+    if labels_csv_path is None:
+        label_mapping = None
+    else:
+        idx_labels, labels = import_labels_csv(labels_csv_path)
+        label_mapping = create_features_mapping(idx_labels, labels, seg_label[1:])
 
     print('-add_patches')
     raw = pad_stack(raw, shape=shape)

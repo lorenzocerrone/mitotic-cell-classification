@@ -15,28 +15,38 @@ default_config = {'datadir': '/home/lcerrone/data/Mitotic-cells/raw/',
                   'logdir': './logs'}
 
 
+def train_transforms():
+    t = transforms.Compose([transforms.RandomHorizontalFlip(),
+                            transforms.RandomVerticalFlip(),
+                            transforms.RandomAutocontrast(),
+                            # transforms.RandomErasing(),
+                            # transforms.RandomPerspective(),
+                            # #transforms.RandomRotation((0, 360)),
+                            # #transforms.GaussianBlur(kernel_size=5, sigma=(0.001, 2.)),
+                            transforms.Normalize((dataset_mean,), (dataset_std,)),
+                            transforms.CenterCrop((96, 96))
+                            ])
+    return t
+
+
+def val_transforms():
+    t = transforms.Compose([transforms.Normalize((dataset_mean,), (dataset_std,)),
+                            transforms.CenterCrop((96, 96))
+                            ])
+    return t
+
+
 def train(config=None):
     config = config if config is not None else default_config
 
     cv_splits = get_cv_splits(config['datadir'])
     split = cv_splits[config['split']]
 
-    m_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),
-                                       transforms.RandomVerticalFlip(),
-                                       transforms.RandomAutocontrast(),
-                                       # transforms.RandomErasing(),
-                                       # transforms.RandomPerspective(),
-                                       # #transforms.RandomRotation((0, 360)),
-                                       # #transforms.GaussianBlur(kernel_size=5, sigma=(0.001, 2.)),
-                                       transforms.Normalize((dataset_mean,), (dataset_std,)),
-                                       transforms.CenterCrop((96, 96))
-                                       ])
+    t_transforms = train_transforms()
 
-    v_transforms = transforms.Compose([transforms.Normalize((dataset_mean,), (dataset_std,)),
-                                       transforms.CenterCrop((96, 96))
-                                       ])
+    v_transforms = val_transforms()
 
-    train_dataset = PatchDataset2D(split['train'], use_cache=True, transforms=m_transforms)
+    train_dataset = PatchDataset2D(split['train'], use_cache=True, transforms=t_transforms)
     val_dataset = PatchDataset2D(split['val'], use_cache=True, transforms=v_transforms)
 
     sampler = WeightedRandomSampler(train_dataset.compute_weights(), len(train_dataset), replacement=True)
@@ -81,8 +91,9 @@ def compute_predictions(model, test_loader):
 
 
 def simple_predict(stack_path, model_path):
-    normalize = transforms.Normalize((dataset_mean,), (dataset_std,))
-    test_dataset = PatchDataset2D([stack_path], use_cache=True, transforms=normalize)
+    v_transforms = val_transforms()
+
+    test_dataset = PatchDataset2D([stack_path], use_cache=True, transforms=v_transforms)
     test_loader = DataLoader(test_dataset, batch_size=30, num_workers=20)
 
     model = MitoticNet()

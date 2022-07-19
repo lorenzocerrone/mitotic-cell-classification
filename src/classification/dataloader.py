@@ -10,7 +10,7 @@ def get_cv_splits(source_root: str,
                   number_splits: int = 5,
                   seed: int = 0) -> dict:
     base_path = Path(source_root)
-    list_stacks = list(base_path.glob('**/*.h5'))
+    list_stacks = list(base_path.glob('**/*patches.h5'))
     np.random.seed(seed)
     np.random.shuffle(list_stacks)
 
@@ -30,8 +30,8 @@ def get_cv_splits(source_root: str,
     return splits
 
 
-class PatchDataset2D(Dataset):
-    def __init__(self, list_paths, use_cache=False, transforms=None, h5_cache=True):
+class PatchDataset(Dataset):
+    def __init__(self, list_paths, use_cache=False, transforms=None, h5_cache=True, load_seg=False, n_slices=3):
         global_list_stack, global_num_nuclei, labels = self.get_samples_mapping(list_paths)
 
         self.labels = labels
@@ -43,15 +43,27 @@ class PatchDataset2D(Dataset):
 
         self.transforms = transforms
 
+        self.load_seg = load_seg
         self.h5_cache = h5_cache
         self.data_cache = {}
+        self.n_slices = n_slices
 
     def load_from_file(self, idx):
         cell_pos, path, cell_idx = self.global_list_stack[idx]
         with h5py.File(path, 'r') as f:
+            # load raw
             raw = f['raw_patches'][cell_pos, ...]
+            raw = torch.from_numpy(raw).float()
 
-        raw = torch.from_numpy(raw).float()
+            # load seg
+            if self.load_seg:
+                seg_shape = f['seg_patches'].shape
+                seg = f['seg_patches'][cell_pos, seg_shape[1]//2, ...]
+                seg = seg[None, ...]
+                seg = torch.from_numpy(seg.astype('int32')).float()
+                # cat on axis 0 because cell is already gone
+                raw = torch.cat([raw, seg], 0)
+
         return raw, {'cell_pos': cell_pos, 'path': str(path), 'cell_idx': cell_idx}
 
     def load_from_data_cache(self, idx):
@@ -60,6 +72,16 @@ class PatchDataset2D(Dataset):
             with h5py.File(path, 'r') as f:
                 raw = f['raw_patches'][:, ...]
                 raw = torch.from_numpy(raw).float()
+
+                # load seg
+                if self.load_seg:
+                    seg_shape = f['seg_patches'].shape
+                    seg = f['seg_patches'][:, seg_shape[1]//2, ...]
+                    seg = seg[:, None, ...]
+                    seg = torch.from_numpy(seg.astype('int32')).float()
+                    # cat on axis 1 because 0 is the patch level
+                    raw = torch.cat([raw, seg], 1)
+
                 self.data_cache[path] = raw
 
         raw = self.data_cache[path][cell_pos].clone()
@@ -77,7 +99,7 @@ class PatchDataset2D(Dataset):
                 list_stack = [(i, path, _cell_idx) for i, _cell_idx in enumerate(cell_idx)]
 
             global_list_stack += list_stack
-        return global_list_stack, len(global_list_stack), torch.cat(all_labels)
+        return global_list_stack, len(global_list_stack), torch.cat(all_labels).long()
 
     def get(self, idx):
 
@@ -85,19 +107,18 @@ class PatchDataset2D(Dataset):
             raw, meta = self.load_from_data_cache(idx)
         else:
             raw, meta = self.load_from_file(idx)
-
-        raw = torch.unsqueeze(raw, 0)
-        # seg = torch.from_numpy(seg.astype('int32')).float()
-
-        # return torch.stack([raw, seg], 0), label
         return raw, self.labels[idx], meta
 
     def compute_weights(self, class_weights=None):
         if class_weights is None:
             _, class_weights = torch.unique(self.labels, return_counts=True)
-            class_weights = 1 / class_weights
+            #   class_weights = 1 / class_weights
+            w0 = class_weights[1] / (class_weights[0] + class_weights[1])
+            w1 = class_weights[0] / (class_weights[0] + class_weights[1])
+        else:
+            w0, w1 = class_weights
 
-        weights = torch.where(self.labels == 0, class_weights[0], class_weights[1])
+        weights = torch.where(self.labels == 0, w0, w1)
         return weights
 
     def get_from_cache(self, idx):
@@ -119,3 +140,4 @@ class PatchDataset2D(Dataset):
 
     def __len__(self):
         return self.global_num_nuclei
+

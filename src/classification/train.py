@@ -5,7 +5,7 @@ from torchvision import transforms
 import csv
 import torch
 
-from src.classification.dataloader import PatchDataset2D, get_cv_splits
+from src.classification.dataloader import PatchDataset, get_cv_splits
 from src.classification.model import MitoticNet, aggregate_results
 from src.classification import dataset_mean, dataset_std
 
@@ -18,20 +18,16 @@ default_config = {'datadir': '/home/lcerrone/data/Mitotic-cells/raw/',
 def train_transforms():
     t = transforms.Compose([transforms.RandomHorizontalFlip(),
                             transforms.RandomVerticalFlip(),
-                            transforms.RandomAutocontrast(),
                             # transforms.RandomErasing(),
-                            # transforms.RandomPerspective(),
-                            # #transforms.RandomRotation((0, 360)),
-                            # #transforms.GaussianBlur(kernel_size=5, sigma=(0.001, 2.)),
-                            transforms.Normalize((dataset_mean,), (dataset_std,)),
-                            transforms.CenterCrop((96, 96))
+                            # transforms.RandomRotation((0, 360)),
+                            # transforms.GaussianBlur(kernel_size=5, sigma=(0.001, 2.)),
+                            transforms.Normalize(dataset_mean, dataset_std),
                             ])
     return t
 
 
 def val_transforms():
-    t = transforms.Compose([transforms.Normalize((dataset_mean,), (dataset_std,)),
-                            transforms.CenterCrop((96, 96))
+    t = transforms.Compose([transforms.Normalize(dataset_mean, dataset_std),
                             ])
     return t
 
@@ -43,14 +39,17 @@ def train(config=None):
     split = cv_splits[config['split']]
 
     t_transforms = train_transforms()
-
     v_transforms = val_transforms()
 
-    train_dataset = PatchDataset2D(split['train'], use_cache=True, transforms=t_transforms)
-    val_dataset = PatchDataset2D(split['val'], use_cache=True, transforms=v_transforms)
+    train_dataset = PatchDataset(split['train'], use_cache=True, transforms=t_transforms, load_seg=True)
+    val_dataset = PatchDataset(split['val'], use_cache=True, transforms=v_transforms, load_seg=True)
 
-    sampler = WeightedRandomSampler(train_dataset.compute_weights(), len(train_dataset), replacement=True)
-    train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], sampler=sampler, num_workers=20)
+    #   sampler = WeightedRandomSampler(train_dataset.compute_weights(), len(train_dataset), replacement=True)
+
+    # sampler = WeightedRandomSampler(train_dataset.compute_weights(), 500, replacement=True)
+    # train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], sampler=sampler, num_workers=20)
+
+    train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], num_workers=20)
 
     val_loader = DataLoader(val_dataset, batch_size=30, num_workers=20)
 
@@ -58,7 +57,7 @@ def train(config=None):
 
     model = MitoticNet()
 
-    trainer = pl.Trainer(accelerator='gpu', logger=logger, devices=1)
+    trainer = pl.Trainer(accelerator='gpu', logger=logger, devices=1, reload_dataloaders_every_n_epochs=300)
     trainer.fit(model, train_loader, val_loader)
 
 
@@ -76,16 +75,20 @@ def export_labels_csv(cell_ids, cell_labels, path, csv_columns=('Label', 'Parent
 
 def compute_predictions(model, test_loader):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cpu')
     all_predictions = []
     model = model.to(device)
-    for data in test_loader:
-        raw, y, meta = data
-        raw = raw.to(device)
-        y = y.to(device)
-        _, _, (pred, y) = model.generic_step(raw, y)
-        all_predictions.append([pred, y, meta])
+    model.eval()
+    with torch.no_grad():
+        for data in test_loader:
+            raw, y, meta = data
+            raw = raw.to(device)
+            y = y.to(device)
+            _, _, (pred, out, y) = model.generic_step(raw, y)
+            pred, out, y = pred.cpu(), out.cpu(), y.cpu()
+            all_predictions.append([pred, out, y, meta])
 
-    results = aggregate_results(all_predictions)
+        results = aggregate_results(all_predictions)
 
     return results
 
@@ -93,7 +96,7 @@ def compute_predictions(model, test_loader):
 def simple_predict(stack_path, model_path):
     v_transforms = val_transforms()
 
-    test_dataset = PatchDataset2D([stack_path], use_cache=True, transforms=v_transforms)
+    test_dataset = PatchDataset([stack_path], use_cache=True, transforms=v_transforms)
     test_loader = DataLoader(test_dataset, batch_size=30, num_workers=20)
 
     model = MitoticNet()

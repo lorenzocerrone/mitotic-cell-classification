@@ -22,7 +22,13 @@ def patches_visualizer(patches_path):
         labels = f['labels'][...]
 
     labels += 1
-    labels_patches = seg_patches * labels[:, None, None]
+    if seg_patches.ndim == 3:
+        labels_patches = seg_patches * labels[:, None, None]
+    elif seg_patches.ndim == 4:
+        labels_patches = seg_patches * labels[:, None, None, None]
+    else:
+        raise ValueError
+
     # start viewer
     viewer = napari.Viewer()
     viewer.add_image(raw_patches, contrast_limits=(0, 1))

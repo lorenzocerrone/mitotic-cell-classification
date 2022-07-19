@@ -1,8 +1,11 @@
 from pathlib import Path
 
+from math import ceil
+import h5py
 import numba
 import numpy as np
 import tqdm
+from skimage.filters import gaussian
 
 from src.utils.io import create_add_stack, import_labels_csv, load_raw, load_segmentation
 from src.utils.utils import scale_image, create_features_mapping
@@ -88,7 +91,13 @@ def build_patches(bboxes, raw, seg, label_mapping, shape=(20, 64, 64)):
             }
 
 
-def build_patches2d(bboxes, raw, seg, label_mapping=None, shape=(1, 64, 64)):
+def get_slice(x, center, shape):
+    return x[center[0] - shape[0] // 2:center[0] + ceil(shape[0] / 2),
+             center[1] - shape[1] // 2:center[1] + ceil(shape[1] / 2),
+             center[2] - shape[2] // 2:center[2] + ceil(shape[2] / 2)]
+
+
+def build_patches2d(bboxes, raw, seg, label_mapping=None, shape=(1, 64, 64), sigma=1.0):
     list_raw, list_seg, list_gt, list_idx, list_bbox = [], [], [], [], []
     for i, (key, value) in enumerate(tqdm.tqdm(bboxes.items())):
         zmin, xmin, ymin, zmax, xmax, ymax = value
@@ -96,12 +105,11 @@ def build_patches2d(bboxes, raw, seg, label_mapping=None, shape=(1, 64, 64)):
                   xmin + (xmax - xmin) // 2,
                   ymin + (ymax - ymin) // 2]
 
-        raw_box = raw[center[0],
-                      center[1] - shape[1] // 2:center[1] + shape[1] // 2,
-                      center[2] - shape[2] // 2:center[2] + shape[2] // 2]
-        seg_box = seg[center[0],
-                      center[1] - shape[1] // 2:center[1] + shape[1] // 2,
-                      center[2] - shape[2] // 2:center[2] + shape[2] // 2]
+        raw_box = get_slice(raw, center, shape)
+        seg_box = get_slice(seg, center, shape)
+
+        if sigma is not None:
+            raw_box = gaussian(raw_box, sigma)
 
         seg_mask = np.zeros_like(seg_box)
         seg_mask[seg_box == key] = 1
@@ -140,15 +148,12 @@ def pad_stack(stack, shape):
                                     (shape[2] // 2, shape[2] // 2)))
 
 
-def process_data(raw_path,
-                 segmentation_path,
-                 labels_csv_path=None,
-                 flip=False,
-                 shape=(0, 128, 128),
-                 slack=(2, 20, 20),
-                 mean_voxel_size=(0.281, 0.126, 0.126)):
+def process_tiff2h5(raw_path,
+                    segmentation_path,
+                    flip=False,
+                    mean_voxel_size=(0.281, 0.126, 0.126)):
     raw_path = Path(raw_path)
-    out_file = raw_path.parent / f'{raw_path.stem}_patches.h5'
+    out_file = raw_path.parent / f'{raw_path.stem}.h5'
 
     # load files
     print('-processing raw stain...')
@@ -158,6 +163,20 @@ def process_data(raw_path,
     print('-processing segmentation...')
     seg = load_segmentation(segmentation_path, flip=flip, mean_voxel_size=mean_voxel_size)
     create_add_stack(path=out_file, key='segmentation', stack=seg, voxel_size=mean_voxel_size)
+    return out_file
+
+
+def process_data(h5path,
+                 labels_csv_path=None,
+                 shape=(0, 128, 128),
+                 sigma=None,
+                 slack=(2, 20, 20)):
+    h5path = Path(h5path)
+
+    with h5py.File(h5path, 'r') as f:
+        raw = f['raw'][...]
+        seg = f['segmentation'][...]
+
     # proces segmentation to get bbox
     seg_label = np.unique(seg)
 
@@ -179,7 +198,11 @@ def process_data(raw_path,
                               raw,
                               seg,
                               label_mapping,
-                              shape=shape)
+                              shape=shape,
+                              sigma=sigma)
+
+    out_file = h5path.parent / f'{h5path.stem}_patches.h5'
+    out_file.unlink(missing_ok=True)
 
     for key, value in patches.items():
         create_add_stack(path=out_file, key=key, stack=value)

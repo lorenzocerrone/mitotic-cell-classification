@@ -46,13 +46,14 @@ def plot_confusion_matrix(cm, class_names=('Normal', 'Mitotic')):
     plt.tight_layout()
     plt.ylabel('True label')
     plt.xlabel('Predicted label')
-    return figure
+    return figure, cm
 
 
 def adapt_convnext():
-    model = torchvision.models.convnext_small()
+    # model = torchvision.models.convnext_small(pretrained=False)
+    model = torchvision.models.convnext_tiny(pretrained=False)
 
-    model.features[0] = torchvision.ops.misc.ConvNormActivation(1,
+    model.features[0] = torchvision.ops.misc.ConvNormActivation(4,
                                                                 96,
                                                                 kernel_size=4,
                                                                 stride=4,
@@ -60,7 +61,7 @@ def adapt_convnext():
                                                                 norm_layer=partial(LayerNorm2d, eps=1e-6),
                                                                 activation_layer=None,
                                                                 bias=True, )
-    model.classifier[2] = nn.Linear(768, 2)
+    model.classifier[2] = nn.Linear(768, 1)
     return model
 
 
@@ -85,13 +86,17 @@ class MitoticNet(pl.LightningModule):
 
     def generic_step(self, raw, y, *args):
         # to generalize
-        out = self.model(raw)
-        logits = torch.log_softmax(out, 1)
-        loss = F.nll_loss(logits, y)
+        logits = self.model(raw)
+        logits = torch.squeeze(logits)
+        prob = torch.sigmoid(logits)
 
-        pred = logits.max(1)[1]
+        w = torch.where(y > 0.5, 0.008963545894060768, 0.9910364541059392)
+        loss = F.binary_cross_entropy(prob, y.float(), weight=w)
+        # loss = F.binary_cross_entropy(prob, y.float())
+
+        pred = prob > 0.5
         acc = self.accuracy(pred, y)
-        return loss, acc, (pred, y)
+        return loss, acc, (pred, prob, y)
 
     def training_step(self, batch, batch_idx):
         loss, acc, _ = self.generic_step(*batch)
@@ -101,11 +106,11 @@ class MitoticNet(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss, _, (pred, y) = self.generic_step(*batch)
+        loss, _, (pred, prob, y) = self.generic_step(*batch)
 
         self.log('val_loss', loss, batch_size=pred.shape[0])
 
-        return pred, y, batch[2]
+        return pred, prob, y, batch[2]
 
     def on_validation_epoch_start(self) -> None:
         self.validation_predictions = {}
@@ -119,22 +124,26 @@ class MitoticNet(pl.LightningModule):
             lab = torch.Tensor(res['labels']).long()
             self.confusion_matrix = self.confusion_matrix.cpu()
             cm = self.confusion_matrix(pred.cpu(), lab.cpu()).cpu().numpy()
+            figure, cm = plot_confusion_matrix(cm)
+            cm_diag = (cm[0, 0] + cm[1, 1])/2
             acc = self.accuracy(pred, lab)
 
             self.logger.experiment.add_figure(f'conf matrix: {name}',
-                                              plot_confusion_matrix(cm),
+                                              figure,
                                               global_step=self.current_epoch)
             self.log(f'val: {name}', acc, batch_size=1)
+            self.log(f'val cm diagonal: {name}', cm_diag, batch_size=1)
 
 
 def aggregate_results(outputs):
     results = {}
-    for pred, y, meta in outputs:
-        for path, cell_idx, _pred, _y in zip(meta['path'], meta['cell_idx'], pred, y):
+    for pred, out, y, meta in outputs:
+        for path, cell_idx, _pred, _out, _y in zip(meta['path'], meta['cell_idx'], pred, out, y):
             if path not in results:
-                results[path] = {'cell_idx': [], 'predictions': [], 'labels': []}
+                results[path] = {'cell_idx': [], 'predictions': [], 'outputs': [], 'labels': []}
 
             results[path]['cell_idx'].append(cell_idx.item())
             results[path]['predictions'].append(_pred.item())
+            results[path]['outputs'].append(_out.item())
             results[path]['labels'].append(_y.item())
     return results

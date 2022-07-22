@@ -49,37 +49,97 @@ def plot_confusion_matrix(cm, class_names=('Normal', 'Mitotic')):
     return figure, cm
 
 
-def adapt_convnext():
-    # model = torchvision.models.convnext_small(pretrained=False)
-    model = torchvision.models.convnext_tiny(pretrained=False)
+def adapt_resnet(pretrained=True, model_name='resnet18'):
+    models_dict = {'resnet18': [torchvision.models.resnet18, 64, 512],
+                   'resnet34': [torchvision.models.resnet34, 64, 512],
+                   'resnet50': [torchvision.models.resnet50, 64, 2048],
+                   }
 
-    model.features[0] = torchvision.ops.misc.ConvNormActivation(4,
-                                                                96,
-                                                                kernel_size=4,
-                                                                stride=4,
-                                                                padding=0,
-                                                                norm_layer=partial(LayerNorm2d, eps=1e-6),
-                                                                activation_layer=None,
-                                                                bias=True, )
-    model.classifier[2] = nn.Linear(768, 1)
+    _model, conv_out, fn_in = models_dict[model_name]
+    conv1 = nn.Conv2d(4, conv_out, kernel_size=7, stride=2, padding=3, bias=False)
+
+    if pretrained:
+        model = _model(pretrained=True)
+
+        with torch.no_grad():
+            conv1.weight[:, :3] = model.conv1.weight.clone()
+
+        model.fc = nn.Linear(fn_in, 1)
+
+    else:
+        model = _model(num_classes=1)
+
+    model.conv1 = conv1
+    return model
+
+
+def adapt_convnext(pretrained=True, model_name='tiny'):
+    models_dict = {'tiny': [torchvision.models.convnext_tiny, 96, 768],
+                   'small': [torchvision.models.convnext_small, 96, 768],
+                   'base': [torchvision.models.convnext_base, 128, 1024],
+                   'large': [torchvision.models.convnext_large, 192, 1536],
+                   }
+
+    _model, conv_out, fn_in = models_dict[model_name]
+
+    conv1 = torchvision.ops.misc.ConvNormActivation(4, conv_out,
+                                                    kernel_size=4,
+                                                    stride=4,
+                                                    padding=0,
+                                                    norm_layer=partial(LayerNorm2d, eps=1e-6),
+                                                    activation_layer=None,
+                                                    bias=True, )
+
+    if pretrained:
+        model = _model(pretrained=True)
+        model.classifier[2] = nn.Linear(fn_in, 1)
+
+        with torch.no_grad():
+            conv1[0].weight[:, :3] = model.features[0][0].weight.clone()
+
+    else:
+        model = _model(num_classes=1)
+
+    model.features[0] = conv1
     return model
 
 
 class MitoticNet(pl.LightningModule):
     validation_predictions: dict
 
-    def __init__(self):
+    def __init__(self, config):
         super(MitoticNet, self).__init__()
-        self.model = adapt_convnext()
+
+        if config['model_family'] == 'adapt_resnet':
+            _model = adapt_resnet
+        else:
+            _model = adapt_convnext
+
+        self.model = _model(pretrained=config['pretrained'],
+                            model_name=config['model_name'])
+
+        self.w_bias = config['w_bias']
+
+        self._lr = config['lr']
+        self._wd = config['wd']
+        self.use_scheduler = config['use_scheduler']
+
         self.accuracy = torchmetrics.Accuracy(num_classes=2)
         self.confusion_matrix = torchmetrics.ConfusionMatrix(num_classes=2)
 
     def configure_optimizers(self):
-        lr = 1e-3
-        wd = 0
+        lr = self._lr
+        wd = self._wd
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=wd)
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=wd)
-        return optimizer
+        if self.use_scheduler:
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,
+                                                            max_lr=lr,
+                                                            steps_per_epoch=1179,
+                                                            epochs=10)
+            return [optimizer], [scheduler]
+        else:
+            return optimizer
 
     def forward(self, x):
         return self.model(x)
@@ -90,7 +150,7 @@ class MitoticNet(pl.LightningModule):
         logits = torch.squeeze(logits)
         prob = torch.sigmoid(logits)
 
-        w = torch.where(y > 0.5, 0.008963545894060768, 0.9910364541059392)
+        w = torch.where(y > 0.5, self.w_bias, 1.0)
         loss = F.binary_cross_entropy(prob, y.float(), weight=w)
         # loss = F.binary_cross_entropy(prob, y.float())
 
@@ -117,22 +177,32 @@ class MitoticNet(pl.LightningModule):
 
     def validation_epoch_end(self, outputs) -> None:
         results = aggregate_results(outputs)
+        acc_mean, cm_diag_mean = 0, 0
+        batch_size = 0
 
         for path, res in results.items():
             name = path.split('/')[-1]
             pred = torch.Tensor(res['predictions']).long()
+            batch_size = pred.shape[0]
+
             lab = torch.Tensor(res['labels']).long()
             self.confusion_matrix = self.confusion_matrix.cpu()
             cm = self.confusion_matrix(pred.cpu(), lab.cpu()).cpu().numpy()
             figure, cm = plot_confusion_matrix(cm)
-            cm_diag = (cm[0, 0] + cm[1, 1])/2
+            cm_diag = (cm[0, 0] + cm[1, 1]) / 2
+            cm_diag_mean += cm_diag
+
             acc = self.accuracy(pred, lab)
+            acc_mean += acc
 
             self.logger.experiment.add_figure(f'conf matrix: {name}',
                                               figure,
                                               global_step=self.current_epoch)
             self.log(f'val: {name}', acc, batch_size=1)
             self.log(f'val cm diagonal: {name}', cm_diag, batch_size=1)
+
+        self.log('val_acc', acc_mean / len(results.keys()), batch_size=batch_size)
+        self.log('val_cm_diag', cm_diag_mean / len(results.keys()), batch_size=batch_size)
 
 
 def aggregate_results(outputs):

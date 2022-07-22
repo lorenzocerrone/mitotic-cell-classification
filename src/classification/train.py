@@ -8,11 +8,33 @@ import torch
 from src.classification.dataloader import PatchDataset, get_cv_splits
 from src.classification.model import MitoticNet, aggregate_results
 from src.classification import dataset_mean, dataset_std
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 
 default_config = {'datadir': '/home/lcerrone/data/Mitotic-cells/raw/',
                   'split': 0,
                   'batch_size': 30,
+                  'model': {'model_family': 'adapt_convnext',
+                            'model_name': 'tiny',
+                            'pretrained': True,
+                            'w_bias': 0.1,
+                            'lr': 1e-3,
+                            'wd': 1e-5,
+                            'use_scheduler': False,
+                            },
                   'logdir': './logs'}
+
+
+def checkpoint_callbacks():
+    common_checkpoints_pattern: str = '{epoch:03d}_{val_acc:.2f}_{val_cm_diag:.2f}'
+    cp1 = ModelCheckpoint(filename=f"last_{common_checkpoints_pattern}")
+    cp2 = ModelCheckpoint(monitor='val_acc',
+                          filename=f"best_acc_{common_checkpoints_pattern}",
+                          mode='max')
+    cp3 = ModelCheckpoint(monitor='val_cm_diag',
+                          filename=f"best_cm_diag_{common_checkpoints_pattern}",
+                          save_top_k=1,
+                          mode='max')
+    return [cp1, cp2, cp3, LearningRateMonitor()]
 
 
 def train_transforms():
@@ -41,23 +63,41 @@ def train(config=None):
     t_transforms = train_transforms()
     v_transforms = val_transforms()
 
-    train_dataset = PatchDataset(split['train'], use_cache=True, transforms=t_transforms, load_seg=True)
-    val_dataset = PatchDataset(split['val'], use_cache=True, transforms=v_transforms, load_seg=True)
+    train_dataset = PatchDataset(split['train'], use_cache=False, transforms=t_transforms, load_seg=True)
+    val_dataset = PatchDataset(split['val'], use_cache=False, transforms=v_transforms, load_seg=True)
 
-    #   sampler = WeightedRandomSampler(train_dataset.compute_weights(), len(train_dataset), replacement=True)
+    sampler = WeightedRandomSampler(train_dataset.compute_weights(), len(train_dataset), replacement=True)
+    #   sampler = WeightedRandomSampler(train_dataset.compute_weights(), 500, replacement=True)
 
-    # sampler = WeightedRandomSampler(train_dataset.compute_weights(), 500, replacement=True)
-    # train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], sampler=sampler, num_workers=20)
+    train_loader = DataLoader(train_dataset,
+                              batch_size=config['batch_size'],
+                              sampler=sampler,
+                              num_workers=10,
+                              persistent_workers=True)
 
-    train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], num_workers=20)
+    # train_loader = DataLoader(train_dataset,
+    #                           batch_size=config['batch_size'],
+    #                           num_workers=10,
+    #                           persistent_workers=True)
 
-    val_loader = DataLoader(val_dataset, batch_size=30, num_workers=20)
+    val_loader = DataLoader(val_dataset,
+                            batch_size=30,
+                            num_workers=10,
+                            persistent_workers=True)
 
-    logger = pl_loggers.TensorBoardLogger(config['logdir'])
+    exp_name = f"split:{config['split']}_model:{config['model']['model_name']}:{config['model']['w_bias']}"
+    logger = pl_loggers.TensorBoardLogger(config['logdir'], name=exp_name)
 
-    model = MitoticNet()
+    model = MitoticNet(config['model'])
 
-    trainer = pl.Trainer(accelerator='gpu', logger=logger, devices=1, reload_dataloaders_every_n_epochs=300)
+    callbacks = checkpoint_callbacks()
+
+    trainer = pl.Trainer(accelerator='gpu',
+                         logger=logger,
+                         max_epochs=20,
+                         devices=1,
+                         callbacks=callbacks
+                         )
     trainer.fit(model, train_loader, val_loader)
 
 

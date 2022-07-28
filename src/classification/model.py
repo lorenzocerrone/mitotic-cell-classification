@@ -49,6 +49,34 @@ def plot_confusion_matrix(cm, class_names=('Normal', 'Mitotic')):
     return figure, cm
 
 
+class BasicNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(4, 16, kernel_size=7, stride=3, bias=False)
+        self.pool1 = nn.MaxPool2d(4, 4)
+
+        self.conv2_1 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv2_2 = nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, bias=False)
+        self.pool2 = nn.MaxPool2d(2, 2)
+
+        self.fc1 = nn.Linear(800, 84)
+        # self.fc2 = nn.Linear(120, 84)
+        self.fc = nn.Linear(84, 1)
+
+    def forward(self, x):
+        x = self.pool1(F.relu(self.conv1(x)))
+
+        x = F.relu(self.conv2_1(x))
+        x = F.relu(self.conv2_2(x))
+        x = self.pool2(x)
+
+        x = torch.flatten(x, 1)  # flatten all dimensions except batch
+        x = F.relu(self.fc1(x))
+        # x = F.relu(self.fc2(x))
+        x = self.fc(x)
+        return x
+
+
 def adapt_resnet(pretrained=True, model_name='resnet18'):
     models_dict = {'resnet18': [torchvision.models.resnet18, 64, 512],
                    'resnet34': [torchvision.models.resnet34, 64, 512],
@@ -117,6 +145,7 @@ class MitoticNet(pl.LightningModule):
 
         self.model = _model(pretrained=config['pretrained'],
                             model_name=config['model_name'])
+        # self.model = BasicNet()
 
         self.w_bias = config['w_bias']
 
@@ -126,6 +155,7 @@ class MitoticNet(pl.LightningModule):
 
         self.accuracy = torchmetrics.Accuracy(num_classes=2)
         self.confusion_matrix = torchmetrics.ConfusionMatrix(num_classes=2)
+        self.save_hyperparameters()
 
     def configure_optimizers(self):
         lr = self._lr

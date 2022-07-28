@@ -7,21 +7,32 @@ import torch
 
 from src.classification.dataloader import PatchDataset, get_cv_splits
 from src.classification.model import MitoticNet, aggregate_results
-from src.classification import dataset_mean, dataset_std
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 
 default_config = {'datadir': '/home/lcerrone/data/Mitotic-cells/raw/',
                   'split': 0,
                   'batch_size': 30,
-                  'model': {'model_family': 'adapt_convnext',
-                            'model_name': 'tiny',
+                  'sub_epoch': 8,
+                  'model': {'model_family': 'adapt_resnet',
+                            'model_name': 'resnet50',
                             'pretrained': True,
-                            'w_bias': 0.1,
+                            'w_bias': 1.0,
                             'lr': 1e-3,
-                            'wd': 1e-5,
+                            'wd': 1e-4,
                             'use_scheduler': False,
                             },
                   'logdir': './logs'}
+
+"""
+'model': {'model_family': 'adapt_convnext',
+        'model_name': 'tiny',
+        'pretrained': True,
+        'w_bias': 0.1,
+        'lr': 1e-3,
+        'wd': 1e-5,
+        'use_scheduler': False,
+        },
+"""
 
 
 def checkpoint_callbacks():
@@ -32,7 +43,7 @@ def checkpoint_callbacks():
                           mode='max')
     cp3 = ModelCheckpoint(monitor='val_cm_diag',
                           filename=f"best_cm_diag_{common_checkpoints_pattern}",
-                          save_top_k=1,
+                          save_top_k=5,
                           mode='max')
     return [cp1, cp2, cp3, LearningRateMonitor()]
 
@@ -43,15 +54,15 @@ def train_transforms():
                             # transforms.RandomErasing(),
                             # transforms.RandomRotation((0, 360)),
                             # transforms.GaussianBlur(kernel_size=5, sigma=(0.001, 2.)),
-                            transforms.Normalize(dataset_mean, dataset_std),
+                            # transforms.Normalize(dataset_mean, dataset_std),
                             ])
     return t
 
 
 def val_transforms():
-    t = transforms.Compose([transforms.Normalize(dataset_mean, dataset_std),
-                            ])
-    return t
+    # t = transforms.Compose([transforms.Normalize(dataset_mean, dataset_std),
+    #                        ])
+    return None
 
 
 def train(config=None):
@@ -61,13 +72,14 @@ def train(config=None):
     split = cv_splits[config['split']]
 
     t_transforms = train_transforms()
-    v_transforms = val_transforms()
+    v_transforms = None  # val_transforms()
+    train_dataset = PatchDataset(split['train'], transforms=t_transforms, load_seg=True)
+    val_dataset = PatchDataset(split['val'], transforms=v_transforms, load_seg=True)
 
-    train_dataset = PatchDataset(split['train'], use_cache=False, transforms=t_transforms, load_seg=True)
-    val_dataset = PatchDataset(split['val'], use_cache=False, transforms=v_transforms, load_seg=True)
-
-    sampler = WeightedRandomSampler(train_dataset.compute_weights(), len(train_dataset), replacement=True)
-    #   sampler = WeightedRandomSampler(train_dataset.compute_weights(), 500, replacement=True)
+    sampler = WeightedRandomSampler(train_dataset.compute_weights(),
+                                    len(train_dataset)//config['sub_epoch'],
+                                    replacement=True)
+    # sampler = WeightedRandomSampler(train_dataset.compute_weights(), 300, replacement=True)
 
     train_loader = DataLoader(train_dataset,
                               batch_size=config['batch_size'],
@@ -94,8 +106,9 @@ def train(config=None):
 
     trainer = pl.Trainer(accelerator='gpu',
                          logger=logger,
-                         max_epochs=20,
+                         max_epochs=20 * config['sub_epoch'],
                          devices=1,
+                         log_every_n_steps=25,
                          callbacks=callbacks
                          )
     trainer.fit(model, train_loader, val_loader)
@@ -115,7 +128,6 @@ def export_labels_csv(cell_ids, cell_labels, path, csv_columns=('Label', 'Parent
 
 def compute_predictions(model, test_loader):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    device = torch.device('cpu')
     all_predictions = []
     model = model.to(device)
     model.eval()
@@ -133,17 +145,27 @@ def compute_predictions(model, test_loader):
     return results
 
 
-def simple_predict(stack_path, model_path):
-    v_transforms = val_transforms()
+def simple_predict(stack_path, model_paths, config=None):
+    config = config if config is not None else default_config
 
-    test_dataset = PatchDataset([stack_path], use_cache=True, transforms=v_transforms)
-    test_loader = DataLoader(test_dataset, batch_size=30, num_workers=20)
+    v_transforms = None  # val_transforms()
 
-    model = MitoticNet()
-    model = model.load_from_checkpoint(model_path)
-    results = compute_predictions(model, test_loader)
+    test_dataset = PatchDataset([stack_path], transforms=v_transforms, load_seg=True)
+    test_loader = DataLoader(test_dataset, batch_size=30, num_workers=10)
 
+    results = {'outputs': {}}
+    for model_path in model_paths:
+        model = MitoticNet(config['model'])
+        model = model.load_from_checkpoint(model_path)
+        _results = compute_predictions(model, test_loader)
+        results['outputs'][str(model_path)] = _results[stack_path]['outputs']
+
+    results['cell_idx'] = _results[stack_path]['cell_idx']
+    results['labels'] = _results[stack_path]['labels']
+
+    """
     for key, result in results.items():
         out_path = key.replace('.h5', '_predictions.csv')
         export_labels_csv(result['cell_idx'], result['predictions'], path=out_path)
+    """
     return results

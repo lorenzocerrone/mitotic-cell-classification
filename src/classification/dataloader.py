@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+import torchvision.transforms.functional as F
 
 
 def get_cv_splits(source_root: str,
@@ -31,14 +32,14 @@ def get_cv_splits(source_root: str,
 
 
 class PatchDataset(Dataset):
-    def __init__(self, list_paths, use_cache=False, transforms=None, h5_cache=True, load_seg=False, n_slices=3):
+    def __init__(self, list_paths, apply_norm=True, transforms=None, h5_cache=True, load_seg=False, n_slices=3):
         global_list_stack, global_num_nuclei, labels = self.get_samples_mapping(list_paths)
 
         self.labels = labels
         self.global_num_nuclei = global_num_nuclei
         self.global_list_stack = global_list_stack
 
-        self.use_cache = use_cache
+        self.apply_norm = apply_norm
         self.cache = {}
 
         self.transforms = transforms
@@ -46,6 +47,7 @@ class PatchDataset(Dataset):
         self.load_seg = load_seg
         self.h5_cache = h5_cache
         self.data_cache = {}
+        self.stats_cache = {}
         self.n_slices = n_slices
 
     def load_from_file(self, idx):
@@ -64,7 +66,13 @@ class PatchDataset(Dataset):
                 # cat on axis 0 because cell is already gone
                 raw = torch.cat([raw, seg], 0)
 
-        return raw, {'cell_pos': cell_pos, 'path': str(path), 'cell_idx': cell_idx}
+            mean, std = f.attrs['raw_patches_mean'], f.attrs['raw_patches_std']
+
+        return raw, {'cell_pos': cell_pos,
+                     'path': str(path),
+                     'cell_idx': cell_idx,
+                     'mean': mean,
+                     'std': std}
 
     def load_from_data_cache(self, idx):
         cell_pos, path, cell_idx = self.global_list_stack[idx]
@@ -82,10 +90,18 @@ class PatchDataset(Dataset):
                     # cat on axis 1 because 0 is the patch level
                     raw = torch.cat([raw, seg], 1)
 
+                mean, std = f.attrs['raw_patches_mean'], f.attrs['raw_patches_std']
+
                 self.data_cache[path] = raw
+                self.stats_cache[path] = (mean, std)
 
         raw = self.data_cache[path][cell_pos].clone()
-        return raw, {'cell_pos': cell_pos, 'path': str(path), 'cell_idx': cell_idx}
+        mean, std = self.stats_cache[path]
+        return raw, {'cell_pos': cell_pos,
+                     'path': str(path),
+                     'cell_idx': cell_idx,
+                     'mean': mean,
+                     'std': std}
 
     @staticmethod
     def get_samples_mapping(list_paths):
@@ -121,20 +137,16 @@ class PatchDataset(Dataset):
         weights = torch.where(self.labels == 0, w0, w1)
         return weights
 
-    def get_from_cache(self, idx):
-        if idx in self.cache:
-            data = self.cache[idx]
-        else:
-            data = self.get(idx)
-            self.cache[idx] = data
-
-        return data[0].clone(), data[1], data[2]
-
     def __getitem__(self, idx):
-        data, label, meta = self.get_from_cache(idx) if self.use_cache else self.get(idx)
 
+        data, label, meta = self.get(idx)
         if self.transforms is not None:
             data = self.transforms(data)
+
+        if self.apply_norm:
+            data = F.normalize(data,
+                               [meta['mean'], meta['mean'], meta['mean'], 0.],
+                               [meta['std'], meta['std'], meta['std'], 1.])
 
         return data, label, meta
 

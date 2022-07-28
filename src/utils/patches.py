@@ -134,12 +134,16 @@ def build_patches2d(bboxes, raw, seg, label_mapping=None, shape=(1, 64, 64), sig
         list_idx.append(key)
         list_bbox.append(value)
 
-    return {'raw_patches': np.array(list_raw),
+    list_raw = np.array(list_raw)
+    list_raw = (list_raw - np.min(list_raw)) / (np.max(list_raw) - np.min(list_raw))
+    raw_mean, raw_std = np.mean(list_raw), np.std(list_raw)
+
+    return {'raw_patches': list_raw,
             'seg_patches': np.array(list_seg),
             'labels': np.array(list_gt),
             'cell_bbox': np.array(list_bbox),
             'cell_idx': np.array(list_idx),
-            }
+            }, (raw_mean, raw_std)
 
 
 def pad_stack(stack, shape):
@@ -163,7 +167,7 @@ def process_tiff2h5(raw_path,
     print('-processing segmentation...')
     seg = load_segmentation(segmentation_path, flip=flip, mean_voxel_size=mean_voxel_size)
     create_add_stack(path=out_file, key='segmentation', stack=seg, voxel_size=mean_voxel_size)
-    return out_file
+    return out_file, (raw, seg)
 
 
 def process_data(h5path,
@@ -194,17 +198,21 @@ def process_data(h5path,
     bboxes = get_bboxes(seg.astype('int64'), seg_label[1:].astype('int64'), slack=slack)
 
     print('-building patches...')
-    patches = build_patches2d(bboxes,
-                              raw,
-                              seg,
-                              label_mapping,
-                              shape=shape,
-                              sigma=sigma)
+    patches, (raw_mean, raw_std) = build_patches2d(bboxes,
+                                                   raw,
+                                                   seg,
+                                                   label_mapping,
+                                                   shape=shape,
+                                                   sigma=sigma)
 
     out_file = h5path.parent / f'{h5path.stem}_patches.h5'
     out_file.unlink(missing_ok=True)
 
     for key, value in patches.items():
         create_add_stack(path=out_file, key=key, stack=value)
+
+    with h5py.File(out_file, 'a') as f:
+        f.attrs['raw_patches_mean'] = raw_mean
+        f.attrs['raw_patches_std'] = raw_std
 
     return out_file

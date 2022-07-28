@@ -57,7 +57,7 @@ def mapping2image(in_image, mappings, data_type='int64'):
     return out_image
 
 
-def map_cell_features2segmentation(segmentation, cell_ids, cell_feature):
+def map_cell_features2segmentation(segmentation, cell_ids, cell_feature, data_type='int64'):
     cell_feature_mapping = create_cell_mapping(cell_ids, cell_feature)
-    features_image = mapping2image(segmentation, cell_feature_mapping)
+    features_image = mapping2image(segmentation, cell_feature_mapping, data_type=data_type)
     return features_image

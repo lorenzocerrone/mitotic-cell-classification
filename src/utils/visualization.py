@@ -1,6 +1,7 @@
 import h5py
 import napari
 import numpy as np
+from magicgui import magicgui
 
 from src.utils.io import load_raw, load_segmentation
 from src.utils.utils import map_cell_features2segmentation
@@ -36,11 +37,12 @@ def patches_visualizer(patches_path):
     return viewer
 
 
-def predictions_visualizer(patches_path, predictions):
-
-    with h5py.File(patches_path, 'r') as f:
+def predictions_visualizer(stain_path, patches_path, predictions, confidence=None):
+    with h5py.File(stain_path, 'r') as f:
         raw = f['raw'][...]
         seg = f['segmentation'][...]
+
+    with h5py.File(patches_path, 'r') as f:
         cell_idx = f['cell_idx'][...]
         labels = f['labels'][...]
 
@@ -49,8 +51,12 @@ def predictions_visualizer(patches_path, predictions):
     viewer = napari.Viewer()
     viewer.add_image(raw)
 
-    predictions_image = map_cell_features2segmentation(seg, cell_idx, predictions)
-    viewer.add_labels(predictions_image, visible=True)
+    predictions_image = map_cell_features2segmentation(seg, cell_idx, predictions, data_type='float64')
+    viewer.add_image(predictions_image, visible=True)
+
+    if confidence is not None:
+        predictions_image = map_cell_features2segmentation(seg, cell_idx, confidence, data_type='float64')
+        viewer.add_image(predictions_image, visible=False)
 
     if labels_not_empty:
         labels_image = map_cell_features2segmentation(seg, cell_idx, labels)
@@ -61,4 +67,3 @@ def predictions_visualizer(patches_path, predictions):
         errors_image = map_cell_features2segmentation(seg, cell_idx, errors)
 
         viewer.add_labels(errors_image)
-

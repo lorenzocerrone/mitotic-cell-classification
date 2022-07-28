@@ -8,6 +8,7 @@ import torch
 from src.classification.dataloader import PatchDataset, get_cv_splits
 from src.classification.model import MitoticNet, aggregate_results
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+import tqdm
 
 default_config = {'datadir': '/home/lcerrone/data/Mitotic-cells/raw/',
                   'split': 0,
@@ -154,14 +155,14 @@ def simple_predict(stack_path, model_paths, config=None):
     test_loader = DataLoader(test_dataset, batch_size=30, num_workers=10)
 
     results = {'outputs': {}}
-    for model_path in model_paths:
+    for model_path in tqdm.tqdm(model_paths):
         model = MitoticNet(config['model'])
         model = model.load_from_checkpoint(model_path)
         _results = compute_predictions(model, test_loader)
-        results['outputs'][str(model_path)] = _results[stack_path]['outputs']
+        results['outputs'][str(model_path)] = _results[str(stack_path)]['outputs']
 
-    results['cell_idx'] = _results[stack_path]['cell_idx']
-    results['labels'] = _results[stack_path]['labels']
+    results['cell_idx'] = _results[str(stack_path)]['cell_idx']
+    results['labels'] = _results[str(stack_path)]['labels']
 
     """
     for key, result in results.items():

@@ -66,10 +66,10 @@ def create_add_stack(path, key, stack, voxel_size=None, mode='a'):
 def load_raw(raw_path, mean_voxel_size=None, normalize=False):
     raw, voxel_size = load_tiff(raw_path)
     if mean_voxel_size is not None:
-        raw = scale_image_voxel_size(raw, voxel_size, mean_voxel_size, order=2)
+        raw = scale_image_voxel_size(raw, voxel_size, mean_voxel_size, order=1)
 
     if normalize:
-        raw = (raw - raw.min()) / (raw.max() - raw.min())
+        raw = (raw - np.min(raw)) / (np.max(raw) - np.min(raw))
     return raw
 
 

@@ -9,17 +9,14 @@
 conda create -n mitotic -c pytorch -c conda-forge  cudatoolkit=11.3 tifffile h5py pyyaml numba pytorch scipy napari notebook torchvision pytorch-lightning matplotlib
 ```
 
-## Usage
+## Usage (with napari)
 1. Clone the `mitotic-cell-classification` repository
-2. Start a Jupyer notebook
+2. Open a terminal inside `mitotic-cell-classification` and start the viewer
+using 
 ```bash
 conda activate mitotic
-jupyter-notebook
-```
-3. Open the `process-files.ipynb` notebook
-4. Edit the inputs paths
-```python
-raw_path = '~/Mitotic-cells/raw/1136/1136_stain.tif'
-seg_path = '~/Mitotic-cells/raw/1136/1136_segmented_flipped.tif'
-```
-5. Run all cells 
+python run_viewer.py
+``` 
+3. Execute the widget in order (top to bottom) and one-by-one
+4. Once you have a `Mitotic` layer in your viewer, you can over with the mouse
+over wrongly classified cells and correct them using the key-binding `p`.

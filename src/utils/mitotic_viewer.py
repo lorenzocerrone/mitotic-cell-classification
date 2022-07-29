@@ -8,7 +8,7 @@ from napari.types import ImageData, LabelsData, LayerDataTuple
 from typing import List, Dict
 from dataclasses import dataclass
 from concurrent.futures import Future
-from src.classification.train import simple_predict
+from src.classification.train import simple_predict, export_labels_csv
 from src.utils.io import load_raw, load_segmentation
 from src.utils.utils import map_cell_features2segmentation
 
@@ -25,6 +25,7 @@ def mitotic_viewer():
         results: Dict = None
         path: str = None
         patches_path: str = None
+        sigma: int = 0.5
         segmentation = None
         predictions = None
         cell_idx = None
@@ -33,8 +34,8 @@ def mitotic_viewer():
         call_button="Open and Preprocessing",
         raw_path={"label": "Pick nuclei stain file (tiff)"},
         seg_path={"label": "Pick nuclei segmentation file (tiff)"})
-    def open_file(raw_path: Path,
-                  seg_path: Path,
+    def open_file(raw_path: Path = Path.home(),
+                  seg_path: Path = Path.home(),
                   flip=False) -> Future[List[LayerDataTuple]]:
         from napari.qt.threading import thread_worker
 
@@ -110,6 +111,7 @@ def mitotic_viewer():
 
         @thread_worker
         def func():
+            viewer_state.sigma = sigma
             mask = predictions2mask(segmentation=viewer_state.segmentation,
                                     cell_idx=viewer_state.cell_idx,
                                     predictions=viewer_state.predictions,
@@ -127,21 +129,43 @@ def mitotic_viewer():
 
         return future
 
+    @magicgui(call_button='Export')
+    def export_pred() -> None:
+        out_path = str(viewer_state.patches_path).replace('.h5', '_predictions.csv')
+        export_labels_csv(viewer_state.cell_idx,
+                          viewer_state.predictions > viewer_state.sigma,
+                          path=out_path)
+
     viewer_state = ViewerState()
     viewer = napari.Viewer()
 
     viewer.window.add_dock_widget(open_file())
     viewer.window.add_dock_widget(run_predictions())
     viewer.window.add_dock_widget(threshold_pred)
+    viewer.window.add_dock_widget(export_pred)
 
     @viewer.bind_key('p')
     def print_names(viewer):
-        pos = viewer.cursor.position
-        if 'Mitotic' in viewer.layers.keys():
+        from napari.qt.threading import thread_worker
+
+        @thread_worker
+        def mitotic_proofread():
+            pos = viewer.cursor.position
             z, x, y = viewer.layers['Nuclei'].world_to_data(pos)
-            print(viewer.layers['Nuclei'][z, x, y])
-            idx = viewer.layers['Nuclei'][z, x, y]
+            idx = viewer.layers['Nuclei'].data[int(z), int(x), int(y)]
             loc_idx = np.where(viewer_state.cell_idx == idx)[0]
-            viewer_state.predictions[loc_idx] = 1.
+            if viewer_state.predictions[loc_idx] > viewer_state.sigma:
+                viewer_state.predictions[loc_idx] = 0.
+            else:
+                viewer_state.predictions[loc_idx] = 1.
+            mask = predictions2mask(segmentation=viewer_state.segmentation,
+                                    cell_idx=viewer_state.cell_idx,
+                                    predictions=viewer_state.predictions,
+                                    threshold=viewer_state.sigma)
+            viewer.layers['Mitotic'].data = mask
+
+        if 'Mitotic' in viewer.layers:
+            worker = mitotic_proofread()
+            worker.start()
 
     return viewer

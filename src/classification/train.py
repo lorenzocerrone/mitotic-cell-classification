@@ -147,12 +147,13 @@ def compute_predictions(model, test_loader):
 
 
 def simple_predict(stack_path, model_paths, config=None):
+    torch.multiprocessing.set_sharing_strategy('file_system')
     config = config if config is not None else default_config
 
     v_transforms = None  # val_transforms()
 
     test_dataset = PatchDataset([stack_path], transforms=v_transforms, load_seg=True)
-    test_loader = DataLoader(test_dataset, batch_size=30, num_workers=10)
+    test_loader = DataLoader(test_dataset, batch_size=30)
 
     results = {'outputs': {}}
     for model_path in tqdm.tqdm(model_paths):

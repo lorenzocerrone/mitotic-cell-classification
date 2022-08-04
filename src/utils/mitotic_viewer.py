@@ -130,10 +130,12 @@ def mitotic_viewer():
         return future
 
     @magicgui(call_button='Export')
-    def export_pred() -> None:
+    def export_pred(mitotic: int = 1, normal: int = 10) -> None:
         out_path = str(viewer_state.patches_path).replace('.h5', '_predictions.csv')
+        predictions = np.where(viewer_state.predictions > viewer_state.sigma,
+                               mitotic, normal)
         export_labels_csv(viewer_state.cell_idx,
-                          viewer_state.predictions > viewer_state.sigma,
+                          predictions,
                           path=out_path)
 
     viewer_state = ViewerState()

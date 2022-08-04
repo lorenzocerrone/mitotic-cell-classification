@@ -40,6 +40,12 @@ def mitotic_viewer():
 
         @thread_worker
         def func():
+            # avoid to run conflicting widget
+            viewer_state.predictions = None
+            viewer_state.patches_path = None
+            if 'Mitotic' in viewer.layers:
+                viewer.layers['Mitotic'].data = np.zeros_like(viewer.layers['Mitotic'].data)
+
             path, (raw, seg) = process_tiff2h5(raw_path,
                                                segmentation_path=seg_path,
                                                flip=flip)
@@ -191,7 +197,7 @@ def mitotic_viewer():
                                     threshold=viewer_state.sigma)
             viewer.layers['Mitotic'].data = mask
 
-        if 'Mitotic' in viewer.layers:
+        if 'Mitotic' in viewer.layers and viewer_state.predictions is not None:
             worker = mitotic_proofread()
             worker.start()
 

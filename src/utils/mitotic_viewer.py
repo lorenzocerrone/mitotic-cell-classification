@@ -1,15 +1,16 @@
-import h5py
+import napari
+from concurrent.futures import Future
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List
+
 import napari
 import numpy as np
-from pathlib import Path
 from magicgui import magicgui, magic_factory
-from src.utils.patches import process_data, process_tiff2h5
-from napari.types import ImageData, LabelsData, LayerDataTuple
-from typing import List, Dict
-from dataclasses import dataclass
-from concurrent.futures import Future
+from napari.types import LabelsData, LayerDataTuple
+
 from src.classification.train import simple_predict, export_labels_csv
-from src.utils.io import load_raw, load_segmentation
+from src.utils.patches import process_data, process_tiff2h5
 from src.utils.utils import map_cell_features2segmentation
 
 
@@ -22,8 +23,6 @@ def predictions2mask(segmentation, cell_idx, predictions, threshold=0.5):
 def mitotic_viewer():
     @dataclass
     class ViewerState:
-        results: Dict = None
-        path: str = None
         patches_path: str = None
         sigma: int = 0.5
         segmentation = None
@@ -48,8 +47,8 @@ def mitotic_viewer():
                                         labels_csv_path=None,
                                         shape=(3, 128, 128),
                                         sigma=(0, 1, 1))
-            viewer_state.path = path
             viewer_state.patches_path = patches_path
+            print('preprocessing done!')
             return [(raw, {'name': 'Stain'}, 'image'),
                     (seg, {'name': 'Nuclei'}, 'labels')
                     ]
@@ -73,7 +72,6 @@ def mitotic_viewer():
         @thread_worker
         def func():
             results = simple_predict(viewer_state.patches_path, list_checkpoints)
-            viewer_state.results = results
 
             list_outs = []
             for res in results['outputs'].values():
@@ -90,9 +88,14 @@ def mitotic_viewer():
                                     cell_idx=viewer_state.cell_idx,
                                     predictions=predictions,
                                     threshold=0.5)
+            print('predictions done!')
             return [(mask, {'name': 'Mitotic'}, 'labels')]
 
         future = Future()
+
+        if viewer_state.patches_path is None:
+            print('Warning: please use the open and processing widget before running the predictions')
+            return future
 
         def on_done(result):
             future.set_result(result)
@@ -106,8 +109,6 @@ def mitotic_viewer():
     @magicgui(call_button='Update', sigma={"widget_type": "FloatSlider", "max": 1., 'min': 0.})
     def threshold_pred(sigma: float = .5) -> Future[List[LayerDataTuple]]:
         from napari.qt.threading import thread_worker
-        if viewer_state.predictions is None:
-            return None
 
         @thread_worker
         def func():
@@ -116,9 +117,14 @@ def mitotic_viewer():
                                     cell_idx=viewer_state.cell_idx,
                                     predictions=viewer_state.predictions,
                                     threshold=sigma)
+            print('threshold done!')
             return [(mask, {'name': 'Mitotic'}, 'labels')]
 
         future = Future()
+
+        if viewer_state.predictions is None:
+            print('Warning: please run the predictions widget before changing the threshold')
+            return future
 
         def on_done(result):
             future.set_result(result)
@@ -131,12 +137,17 @@ def mitotic_viewer():
 
     @magicgui(call_button='Export')
     def export_pred(mitotic: int = 1, normal: int = 10) -> None:
+        if viewer_state.predictions is None:
+            print('Warning: please run the predictions widget before exporting the labels')
+            return None
+
         out_path = str(viewer_state.patches_path).replace('.h5', '_predictions.csv')
         predictions = np.where(viewer_state.predictions > viewer_state.sigma,
                                mitotic, normal)
         export_labels_csv(viewer_state.cell_idx,
                           predictions,
                           path=out_path)
+        print('Export done!')
 
     viewer_state = ViewerState()
     viewer = napari.Viewer()
@@ -155,11 +166,25 @@ def mitotic_viewer():
             pos = viewer.cursor.position
             z, x, y = viewer.layers['Nuclei'].world_to_data(pos)
             idx = viewer.layers['Nuclei'].data[int(z), int(x), int(y)]
+            if idx == 0:
+                print(f'Warning: can not change the background classification')
+                return None
+
             loc_idx = np.where(viewer_state.cell_idx == idx)[0]
-            if viewer_state.predictions[loc_idx] > viewer_state.sigma:
+            old_prob = viewer_state.predictions[loc_idx][0]
+            _mitotic, _not_mitotic = 'Mitotic', 'Non-Mitotic'
+            if old_prob > viewer_state.sigma:
+                old_classification = _mitotic
+                new_classification = _not_mitotic
                 viewer_state.predictions[loc_idx] = 0.
             else:
+                old_classification = _not_mitotic
+                new_classification = _mitotic
                 viewer_state.predictions[loc_idx] = 1.
+
+            print(f'cell idx: {idx} was predicted {old_classification} with probability {old_prob * 100:.1f}%'
+                  f' and now is set to {new_classification}')
+
             mask = predictions2mask(segmentation=viewer_state.segmentation,
                                     cell_idx=viewer_state.cell_idx,
                                     predictions=viewer_state.predictions,
